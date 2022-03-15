@@ -1,496 +1,147 @@
+# Marker to tell the VCL compiler that this VCL has been adapted to the
+# new 4.0 format.
+vcl 4.0;
+
 import std;
-import directors;
 
-backend mayxonghoispa { # Define one backend
-  .host = "127.0.0.1";    # IP or Hostname of backend
-  .port = "8080";           # Port Apache or whatever is listening
-  .max_connections = 200; # That's it
-
-#  .probe = {
-#    .url = "/"; # short easy way (GET /)
-#    # We prefer to only do a HEAD /
-#    .request =
-#      "HEAD / HTTP/1.1"
-#      "Host: localhost"
-#      "Connection: close"
-#      "User-Agent: Varnish Health Probe";
-
-#    .interval  = 5s; # check the health of each backend every 5 seconds
-#    .timeout   = 5s; # timing out after 1 second.
-#    .window    = 5;  # If 3 out of the last 5 polls succeeded the backend is considered healthy, otherwise it will be marked as sick
-#    .threshold = 3;
-#  }
-
-  .first_byte_timeout     = 300s;   # How long to wait before we receive a first byte from our backend?
-  .connect_timeout        = 300s;     # How long to wait for a backend connection?
-  .between_bytes_timeout  = 300s;     # How long to wait between bytes received from our backend?
+# Block 1: Define upstream server's host and port. Set this to point to your
+# content server.
+backend default {
+    .host = "127.0.0.1";
+    .port = "8080";
 }
 
-acl purge {
-  # ACL we'll use later to allow purges
-  "localhost";
-  "127.0.0.1";
-  "::1";
+# Block 2: Define a key based on the User-Agent which can be used for hashing.
+# Also set the PS-CapabilityList header for PageSpeed server to respect.
+sub generate_user_agent_based_key {
+    # Define placeholder PS-CapabilityList header values for large and small
+    # screens with no UA dependent optimizations. Note that these placeholder
+    # values should not contain any of ll, ii, dj, jw or ws, since these
+    # codes will end up representing optimizations to be supported for the
+    # request.
+    set req.http.default_ps_capability_list_for_large_screens = "LargeScreen.SkipUADependentOptimizations:";
+    set req.http.default_ps_capability_list_for_small_screens = "TinyScreen.SkipUADependentOptimizations:";
+
+    # As a fallback, the PS-CapabilityList header that is sent to the upstream
+    # PageSpeed server should be for a large screen device with no browser
+    # specific optimizations.
+    set req.http.PS-CapabilityList = req.http.default_ps_capability_list_for_large_screens;
+
+    # Cache-fragment 1: Desktop User-Agents that support lazyload_images (ll),
+    # inline_images (ii) and defer_javascript (dj).
+    # Note: Wget is added for testing purposes only.
+    if (req.http.User-Agent ~ "(?i)Chrome/|Firefox/|MSIE |Safari|Wget") {
+      set req.http.PS-CapabilityList = "ll,ii,dj:";
+    }
+    # Cache-fragment 2: Desktop User-Agents that support lazyload_images (ll),
+    # inline_images (ii), defer_javascript (dj), webp (jw) and lossless_webp
+    # (ws).
+    if (req.http.User-Agent ~
+        "(?i)Chrome/[2][3-9]+\.|Chrome/[[3-9][0-9]+\.|Chrome/[0-9]{3,}\.") {
+      set req.http.PS-CapabilityList = "ll,ii,dj,jw,ws:";
+    }
+    # Cache-fragment 3: This fragment contains (a) Desktop User-Agents that
+    # match fragments 1 or 2 but should not because they represent older
+    # versions of certain browsers or bots and (b) Tablet User-Agents that
+    # on all browsers and use image compression qualities applicable to large
+    # screens. Note that even tablets that are capable of supporting inline or
+    # webp images, e.g. Android 4.1.2, will not get these advanced
+    # optimizations.
+    if (req.http.User-Agent ~ "(?i)Firefox/[1-2]\.|MSIE [5-8]\.|bot|Yahoo!|Ruby|RPT-HTTPClient|(Google \(\+https\:\/\/developers\.google\.com\/\+\/web\/snippet\/\))|Android|iPad|TouchPad|Silk-Accelerated|Kindle Fire") {
+      set req.http.PS-CapabilityList = req.http.default_ps_capability_list_for_large_screens;
+    }
+    # Cache-fragment 4: Mobiles and small screen tablets will use image
+    # compression qualities applicable to small screens, but all other
+    # optimizations will be those that work on all browsers.
+    if (req.http.User-Agent ~ "(?i)Mozilla.*Android.*Mobile*|iPhone|BlackBerry|Opera Mobi|Opera Mini|SymbianOS|UP.Browser|J-PHONE|Profile/MIDP|portalmmm|DoCoMo|Obigo|Galaxy Nexus|GT-I9300|GT-N7100|HTC One|Nexus [4|7|S]|Xoom|XT907") {
+      set req.http.PS-CapabilityList = req.http.default_ps_capability_list_for_small_screens;
+    }
+    # Remove placeholder header values.
+    unset req.http.default_ps_capability_list_for_large_screens;
+    unset req.http.default_ps_capability_list_for_large_screens;
 }
 
-/*
-acl editors {
-  # ACL to honor the "Cache-Control: no-cache" header to force a refresh but only from selected IPs
-  "localhost";
-  "127.0.0.1";
-  "::1";
-}
-*/
-sub vcl_init {
-  # Called when VCL is loaded, before any requests pass through it.
-  # Typically used to initialize VMODs.
-
-  new vdir = directors.round_robin();
-  vdir.add_backend(mayxonghoispa);
-}
-sub vcl_recv {
-  # Called at the beginning of a request, after the complete request has been received and parsed.
-  # Its purpose is to decide whether or not to serve the request, how to do it, and, if applicable,
-  # which backend to use.
-  # also used to modify the request
-  if (req.url ~ "\.pagespeed\.([a-z]\.)?[a-z]{2}\.[^.]{10}\.[^.]+") {
-    return (pass);
- }
-  set req.backend_hint = vdir.backend(); # send all traffic to the vdir director
-
-  # Normalize the header, remove the port (in case you're testing this on various TCP ports)
-  set req.http.Host = regsub(req.http.Host, ":[0-9]+", "");
-
-  # Remove the proxy header (see https://httpoxy.org/#mitigate-varnish)
-  unset req.http.proxy;
-
-  # Normalize the query arguments
-# set req.url = std.querysort(req.url);
- if (req.url !~ "wp-admin") {
-   set req.url = std.querysort(req.url);
-  }
-  # Tell PageSpeed not to use optimizations specific to this request.
-  set req.http.PS-CapabilityList = "fully general optimizations only";
-  # Don't allow external entities to force beaconing.
-  unset req.http.PS-ShouldBeacon;
-
-  # Allow purging
-  if (req.method == "PURGE") {
-    if (!client.ip ~ purge) { # purge is the ACL defined at the begining
-      # Not from an allowed IP? Then die with an error.
-      return (synth(405, "This IP is not allowed to send PURGE requests."));
-    }
-    # If you got this stage (and didn't error out above), purge the cached result
-    return (purge);
-  }
-  # Normalize the header, remove the port (in case you're testing this on various TCP ports)
-  set req.http.Host = regsub(req.http.Host, ":[0-9]+", "");
-
-  # set or append the client.ip to X-Forwarded-For header. Important for logging and correct IPs.
-  if (req.restarts == 0) {
-    if (req.http.X-Forwarded-For) {
-      set req.http.X-Forwarded-For = req.http.X-Forwarded-For + ", " + client.ip;
-    } else {
-      set req.http.X-Forwarded-For = client.ip;
-    }
-   }
-  # Do not cache AJAX requests.
-    if (req.http.X-Requested-With == "XMLHttpRequest") {
-        return(pass);
-    }
-
-  # Post requests will not be cached
-    if (req.http.Authorization || req.method == "POST") {
-        return (pass);
-    }
- # Dont Cache WordPress post pages and edit pages
-    if (req.url ~ "(wp-admin|post\.php|edit\.php|wp-login)") {
-        return(pass);
-    }
-    if (req.url ~ "/wp-cron.php" || req.url ~ "preview=true") {
-        return (pass);
-    }
-
-  # Woocommerce
-    if (req.url ~ "(cart|my-account|checkout|addons)") {
-        return (pass);
-    }
-    if ( req.url ~ "\?add-to-cart=" ) {
-        return (pass);
-    }
-
-  # Only deal with "normal" types
-  if (req.method != "GET" &&
-      req.method != "HEAD" &&
-      req.method != "PUT" &&
-      req.method != "POST" &&
-      req.method != "TRACE" &&
-      req.method != "OPTIONS" &&
-      req.method != "PATCH" &&
-      req.method != "DELETE") {
-    /* Non-RFC2616 or CONNECT which is weird. */
-    /*Why send the packet upstream, while the visitor is using a non-valid HTTP method? */
-    return(synth(404, "Non-valid HTTP method!"));
-  }
-  # Implementing websocket support (https://www.varnish-cache.org/docs/4.0/users-guide/vcl-example-websockets.html)
-  if (req.http.Upgrade ~ "(?i)websocket") {
-    return (pipe);
-  }
-
-  # Only cache GET or HEAD requests. This makes sure the POST requests are always passed.
-  if (req.method != "GET" && req.method != "HEAD") {
-    return (pass);
-  }
-  # Woocommerce
-    if (req.url ~ "(cart|my-account|checkout|addons)") {
-        return (pass);
-    }
-    if ( req.url ~ "\?add-to-cart=" ) {
-        return (pass);
-    }
-
-  # Only deal with "normal" types
-  if (req.method != "GET" &&
-      req.method != "HEAD" &&
-      req.method != "PUT" &&
-      req.method != "POST" &&
-      req.method != "TRACE" &&
-      req.method != "OPTIONS" &&
-      req.method != "PATCH" &&
-      req.method != "DELETE") {
-    /* Non-RFC2616 or CONNECT which is weird. */
-    /*Why send the packet upstream, while the visitor is using a non-valid HTTP method? */
-    return(synth(404, "Non-valid HTTP method!"));
-  }
-  # Implementing websocket support (https://www.varnish-cache.org/docs/4.0/users-guide/vcl-example-websockets.html)
-  if (req.http.Upgrade ~ "(?i)websocket") {
-    return (pipe);
-  }
-
-  # Only cache GET or HEAD requests. This makes sure the POST requests are always passed.
-  if (req.method != "GET" && req.method != "HEAD") {
-    return (pass);
-  }
-
-  # Some generic URL manipulation, useful for all templates that follow
-  # First remove the Google Analytics added parameters, useless for our backend
-  if (req.url ~ "(\?|&)(utm_source|utm_medium|utm_campaign|utm_content|gclid|cx|ie|cof|siteurl)=") {
-    set req.url = regsuball(req.url, "&(utm_source|utm_medium|utm_campaign|utm_content|gclid|cx|ie|cof|siteurl)=([A-z0-9_\-\.%25]+)", "");
-    set req.url = regsuball(req.url, "\?(utm_source|utm_medium|utm_campaign|utm_content|gclid|cx|ie|cof|siteurl)=([A-z0-9_\-\.%25]+)", "?");
-    set req.url = regsub(req.url, "\?&", "?");
-    set req.url = regsub(req.url, "\?$", "");
-  }
-
-  # Strip hash, server doesn't need it.
-  if (req.url ~ "\#") {
-    set req.url = regsub(req.url, "\#.*$", "");
-  }
-
-  # Strip a trailing ? if it exists
-  if (req.url ~ "\?$") {
-    set req.url = regsub(req.url, "\?$", "");
-  }
-
-  # Some generic cookie manipulation, useful for all templates that follow
-  # Remove the "has_js" cookie
-  set req.http.Cookie = regsuball(req.http.Cookie, "has_js=[^;]+(; )?", "");
-
-  # Remove any Google Analytics based cookies
-  set req.http.Cookie = regsuball(req.http.Cookie, "__utm.=[^;]+(; )?", "");
-  set req.http.Cookie = regsuball(req.http.Cookie, "_ga=[^;]+(; )?", "");
-  set req.http.Cookie = regsuball(req.http.Cookie, "_gat=[^;]+(; )?", "");
-  set req.http.Cookie = regsuball(req.http.Cookie, "utmctr=[^;]+(; )?", "");
-  set req.http.Cookie = regsuball(req.http.Cookie, "utmcmd.=[^;]+(; )?", "");
-  set req.http.Cookie = regsuball(req.http.Cookie, "utmccn.=[^;]+(; )?", "");
-
-  # Remove DoubleClick offensive cookies
-  set req.http.Cookie = regsuball(req.http.Cookie, "__gads=[^;]+(; )?", "");
-
-  # Remove the Quant Capital cookies (added by some plugin, all __qca)
-  set req.http.Cookie = regsuball(req.http.Cookie, "__qc.=[^;]+(; )?", "");
-
-  # Remove the AddThis cookies
-  set req.http.Cookie = regsuball(req.http.Cookie, "__atuv.=[^;]+(; )?", "");
-
-  # Remove a ";" prefix in the cookie if present
-  set req.http.Cookie = regsuball(req.http.Cookie, "^;\s*", "");
-
-  # Are there cookies left with only spaces or that are empty?
-  if (req.http.cookie ~ "^\s*$") {
-    unset req.http.cookie;
-  }
-
-  if (req.http.Cache-Control ~ "(?i)no-cache") {
-
-   if (! (req.http.Via || req.http.User-Agent ~ "(?i)bot" || req.http.X-Purge)) {
-      #set req.hash_always_miss = true; # Doesn't seems to refresh the object in the cache
-      return(purge); # Couple this with restart in vcl_purge and X-Purge header to avoid loops
-   }
-  }
-
-  # Large static files are delivered directly to the end-user without
-  # waiting for Varnish to fully read the file first.
-  # Varnish 4 fully supports Streaming, so set do_stream in vcl_backend_response()
-  if (req.url ~ "^[^?]*\.(7z|avi|bz2|flac|flv|gz|mka|mkv|mov|mp3|mp4|mpeg|mpg|ogg|ogm|opus|rar|tar|tgz|tbz|txz|wav|webm|xz|zip)(\?.*)?$") {
-    unset req.http.Cookie;
-    return (hash);
- }
-  # Remove all cookies for static files
-  # A valid discussion could be held on this line: do you really need to cache static files that don't cause load? Only if you have memory left.
-  # Sure, there's disk I/O, but chances are your OS will already have these files in their buffers (thus memory).
-  # Before you blindly enable this, have a read here: https://ma.ttias.be/stop-caching-static-files/
-  if (req.url ~ "^[^?]*\.(7z|avi|bmp|bz2|css|csv|doc|docx|eot|flac|flv|gif|gz|ico|jpeg|jpg|js|less|mka|mkv|mov|mp3|mp4|mpeg|mpg|odt|otf|ogg|ogm|opus|pdf|png|ppt|pptx|rar|rtf|svg|svgz|swf|tar|tbz|tgz|ttf|txt|txz|wav|webm|webp|woff|woff2|xls|xlsx|xml|xz|zip)(\?.*)?$") {
-    unset req.http.Cookie;
-    return (hash);
-  }
-
-  # Send Surrogate-Capability headers to announce ESI support to backend
-  set req.http.Surrogate-Capability = "key=ESI/1.0";
-
-  if (req.http.Authorization) {
-    # Not cacheable by default
-    return (pass);
-  }
-  return (hash);
-}
-sub vcl_pipe {
-  # Called upon entering pipe mode.
-  # In this mode, the request is passed on to the backend, and any further data from both the client
-  # and backend is passed on unaltered until either end closes the connection. Basically, Varnish will
-  # degrade into a simple TCP proxy, shuffling bytes back and forth. For a connection in pipe mode,
-  # no other VCL subroutine will ever get called after vcl_pipe.
-
-  # Note that only the first request to the backend will have
-  # X-Forwarded-For set.  If you use X-Forwarded-For and want to
-  # have it set for all requests, make sure to have:
-  # set bereq.http.connection = "close";
-  # here.  It is not set by default as it might break some broken web
-  # applications, like IIS with NTLM authentication.
-
-  # set bereq.http.Connection = "Close";
-
-  # Implementing websocket support (https://www.varnish-cache.org/docs/4.0/users-guide/vcl-example-websockets.html)
-  if (req.http.upgrade) {
-    set bereq.http.upgrade = req.http.upgrade;
-  }
-
-  return (pipe);
-}
-
-sub vcl_pass {
-  # Called upon entering pass mode. In this mode, the request is passed on to the backend, and the
-  # backend's response is passed on to the client, but is not entered into the cache. Subsequent
-  # requests submitted over the same client connection are handled normally.
-
-  # return (pass);
-}
-# The data on which the hashing will take place
 sub vcl_hash {
-  # Called after vcl_recv to create a hash value for the request. This is used as a key
-  # to look up the object in Varnish.
-
-  hash_data(req.url);
-
-  if (req.http.host) {
-    hash_data(req.http.host);
-  } else {
-    hash_data(server.ip);
-  }
-
-  # hash cookies for requests that have them
-  if (req.http.Cookie) {
-    hash_data(req.http.Cookie);
-  }
+  # Block 3: Use the PS-CapabilityList value for computing the hash.
   hash_data(req.http.PS-CapabilityList);
 }
-sub vcl_hit {
-  # 5% of the time ignore that we got a cache hit and send the request to the
-  # backend anyway for instrumentation.
-  if (std.random(0, 100) < 5) {
-    set req.http.PS-ShouldBeacon = "abe02e86-1f0d-420a-80f4-0c4d4add2d94";
+
+# Block 3a: Define ACL for purge requests
+acl purge {
+  # Purge requests are only allowed from localhost.
+  "localhost";
+  "127.0.0.1";
+}
+
+
+# Block 4: In vcl_recv, on receiving a request, call the method responsible for
+# generating the User-Agent based key for hashing into the cache.
+sub vcl_recv {
+  # We want to support beaconing filters, i.e., one or more of inline_images,
+  # lazyload_images, inline_preview_images or prioritize_critical_css are
+  # enabled. We define a placeholder constant called ps_should_beacon_key_value
+  # so that some percentages of hits and misses can be sent to the backend
+  # with this value used for the PS-ShouldBeacon header to force beaconing.
+  # This value should match the value of the DownstreamCacheRebeaconingKey
+  # pagespeed directive used by your backend server.
+  # WARNING: Do not use "random_rebeaconing_key" for your configuration, but
+  # instead change it to something specific to your site, to keep it secure.
+  set req.http.ps_should_beacon_key_value = "random_rebeaconing_key";
+
+  # Incoming PS-ShouldBeacon headers should not be allowed since this will allow
+  # external entities to force the server to instrument pages.
+  unset req.http.PS-ShouldBeacon;
+
+  call generate_user_agent_based_key;
+  # Block 3d: Verify the ACL for an incoming purge request and handle it.
+  if (req.method == "PURGE") {
+    if (!client.ip ~ purge) {
+      return (synth(405,"Not allowed."));
+    }
+    return (purge);
+  }
+  # Blocks which decide whether cache should be bypassed or not go here.
+
+  # Block 5a: Bypass the cache for .pagespeed. resource. PageSpeed has its own
+  # cache for these, and these could bloat up the caching layer.
+  if (req.url ~ "\.pagespeed\.([a-z]\.)?[a-z]{2}\.[^.]{10}\.[^.]+") {
+    # Skip the cache for .pagespeed. resource.  PageSpeed has its own
+    # cache for these, and these could bloat up the caching layer.
     return (pass);
   }
-  # Called when a cache lookup is successful.
-  if (obj.ttl >= 0s) {
-    # A pure unadultered hit, deliver it
-    return (deliver);
+
+  # Block 5b: Only cache responses to clients that support gzip.  Most clients
+  # do, and the cache holds much more if it stores gzipped responses.
+  if (req.http.Accept-Encoding !~ "gzip") {
+    return (pass);
   }
+}
 
-  # https://www.varnish-cache.org/docs/trunk/users-guide/vcl-grace.html
-  # When several clients are requesting the same page Varnish will send one request to the backend and place the others on hold while fetching one copy from the backend. In some products this is called request coalescing and Varnish does this automatically.
-  # If you are serving thousands of hits per second the queue of waiting requests can get huge. There are two potential problems - one is a thundering herd problem - suddenly releasing a thousand threads to serve content might send the load sky high. Secondly - nobody likes to wait. To deal with this we can instruct Varnish to keep the objects in cache beyond their TTL and to serve the waiting requests somewhat stale content.
+# Block 6: Mark HTML uncacheable by caches beyond our control.
+sub vcl_backend_response {
+   if (beresp.http.Content-Type ~ "text/html") {
+     # Hide the upstream cache control header.
+     unset beresp.http.Cache-Control;
+     # Add no-cache Cache-Control header for html.
+     set beresp.http.Cache-Control = "no-cache, max-age=0";
+   }
+   return (deliver);
+}
 
-# if (!std.healthy(req.backend_hint) && (obj.ttl + obj.grace > 0s)) {
-#   return (deliver);
-# } else {
-#   return (miss);
-# }
-  # We have no fresh fish. Lets look at the stale ones.
-  if (std.healthy(req.backend_hint)) {
-    # Backend is healthy. Limit age to 10s.
-    if (obj.ttl + 10s > 0s) {
-      #set req.http.grace = "normal(limited)";
-      return (deliver);
-    } else {
-      # No candidate for grace. Fetch a fresh object.
-      return(miss);
-    }
-  } else {
-    # backend is sick - use full grace
-      if (obj.ttl + obj.grace > 0s) {
-      #set req.http.grace = "full";
-      return (deliver);
-    } else {
-      # no graced object.
-      return (miss);
-    }
+sub vcl_hit { 
+  if (std.random(0, 100) < 5) {
+    set req.http.PS-ShouldBeacon = req.http.ps_should_beacon_key_value;
+    return (pass);
   }
-
-  # fetch & deliver once we get the result
-  return (miss); # Dead code, keep as a safeguard
 }
 
 sub vcl_miss {
-  # Called after a cache lookup if the requested document was not found in the cache. Its purpose
-  # is to decide whether or not to attempt to retrieve the document from the backend, and which
-  # backend to use.
-  # Instrument 25% of cache misses.
+  # Send 25% of the MISSes to the backend for instrumentation.
   if (std.random(0, 100) < 25) {
-    set req.http.PS-ShouldBeacon = "abe02e86-1f0d-420a-80f4-0c4d4add2d94";
+    set req.http.PS-ShouldBeacon = req.http.ps_should_beacon_key_value;
     return (pass);
   }
-  return (fetch);
 }
 
-# Handle the HTTP request coming from our backend
-sub vcl_backend_response {
-  # Called after the response headers has been successfully retrieved from the backend.
-
-  # Pause ESI request and remove Surrogate-Control header
-  if (beresp.http.Surrogate-Control ~ "ESI/1.0") {
-    unset beresp.http.Surrogate-Control;
-    set beresp.do_esi = true;
-  }
-  # Enable cache for all static files
-  # The same argument as the static caches from above: monitor your cache size, if you get data nuked out of it, consider giving up the static file cache.
-  # Before you blindly enable this, have a read here: https://ma.ttias.be/stop-caching-static-files/
-  if (bereq.url ~ "^[^?]*\.(7z|avi|bmp|bz2|css|csv|doc|docx|eot|flac|flv|gif|gz|ico|jpeg|jpg|js|less|mka|mkv|mov|mp3|mp4|mpeg|mpg|odt|otf|ogg|ogm|opus|pdf|png|ppt|pptx|rar|rtf|svg|svgz|swf|tar|tbz|tgz|ttf|txt|txz|wav|webm|webp|woff|woff2|xls|xlsx|xml|xz|zip)(\?.*)?$") {
-    unset beresp.http.set-cookie;
-  }
-
-  # Large static files are delivered directly to the end-user without
-  # waiting for Varnish to fully read the file first.
-  # Varnish 4 fully supports Streaming, so use streaming here to avoid locking.
-  if (bereq.url ~ "^[^?]*\.(7z|avi|bz2|flac|flv|gz|mka|mkv|mov|mp3|mp4|mpeg|mpg|ogg|ogm|opus|rar|tar|tgz|tbz|txz|wav|webm|xz|zip)(\?.*)?$") {
-    unset beresp.http.set-cookie;
-    set beresp.do_stream = true;  # Check memory usage it'll grow in fetch_chunksize blocks (128k by default) if the backend doesn't send a Content-Length header, so only enable it for big objects
-  }
-
-  # Sometimes, a 301 or 302 redirect formed via Apache's mod_rewrite can mess with the HTTP port that is being passed along.
-  # This often happens with simple rewrite rules in a scenario where Varnish runs on :80 and Apache on :8080 on the same box.
-  # A redirect can then often redirect the end-user to a URL on :8080, where it should be :80.
-  # This may need finetuning on your setup.
-  #
-  # To prevent accidental replace, we only filter the 301/302 redirects for now.
-  if (beresp.status == 301 || beresp.status == 302) {
-    set beresp.http.Location = regsub(beresp.http.Location, ":[0-9]+", "");
-  }
-
-  # Set 2min cache if unset for static files
-  if (beresp.ttl <= 0s || beresp.http.Set-Cookie || beresp.http.Vary == "*") {
-    set beresp.ttl = 120s; # Important, you shouldn't rely on this, SET YOUR HEADERS in the backend
-    set beresp.uncacheable = true;
-    return (deliver);
-  }
-
-
-  # Don't cache 50x responses
-  if (beresp.status == 500 || beresp.status == 502 || beresp.status == 503 || beresp.status == 504) {
-    return (abandon);
-  }
-
-  if (beresp.ttl > 0s) {
-  unset beresp.http.expires;
-  set beresp.http.Cache-Control = "max-age=900";
-  set beresp.ttl = 1d; # how long you cache objects
-  set beresp.http.magicmarker = "1";
-  }
- if (beresp.ttl < 900s) {
-    set beresp.ttl = 900s;
-    unset beresp.http.Cache-Control;
-    set beresp.http.Cache-Control = "max-age=900";
-  }
-
-  # Allow stale content, in case the backend goes down.
-  # make Varnish keep all objects for 6 hours beyond their TTL
-  set beresp.grace = 12h;
-
-  return (deliver);
-}
-
-# The routine when we deliver the HTTP request to the user
-# Last chance to modify headers that are sent to the client
-sub vcl_deliver {
-  # Called before a cached object is delivered to the client.
-# Mark HTML as uncacheable for our responses.
-  if (resp.http.Content-Type ~ "text/html") {
-     unset resp.http.Cache-Control;
-     set resp.http.Cache-Control = "no-cache, max-age=0";
- }
-  if (obj.hits > 0) { # Add debug header to see if it's a HIT/MISS and the number of hits, disable when not needed
-    set resp.http.X-Cache = "HIT";
-  } else {
-    set resp.http.X-Cache = "MISS";
-  }
-  # Please note that obj.hits behaviour changed in 4.0, now it counts per objecthead, not per object
-  # and obj.hits may not be reset in some cases where bans are in use. See bug 1492 for details.
-  # So take hits with a grain of salt
-  set resp.http.X-Cache-Hits = obj.hits;
-
-  # Remove some headers: PHP version
-  unset resp.http.X-Powered-By;
-
-  # Remove some headers: Apache version & OS
-  unset resp.http.Server;
-  unset resp.http.X-Drupal-Cache;
-  unset resp.http.X-Varnish;
-  unset resp.http.Via;
-  unset resp.http.Link;
-  unset resp.http.X-Generator;
-
-  return (deliver);
-}
-sub vcl_purge {
-  # Only handle actual PURGE HTTP methods, everything else is discarded
-  if (req.method != "PURGE") {
-    # restart request
-    set req.http.X-Purge = "Yes";
-    return(restart);
-  }
-}
-
-sub vcl_synth {
-  if (resp.status == 720) {
-    # We use this special error status 720 to force redirects with 301 (permanent) redirects
-    # To use this, call the following from anywhere in vcl_recv: return (synth(720, "http://host/new.html"));
-    set resp.http.Location = resp.reason;
-    set resp.status = 301;
-    return (deliver);
-  } elseif (resp.status == 721) {
-    # And we use error status 721 to force redirects with a 302 (temporary) redirect
-    # To use this, call the following from anywhere in vcl_recv: return (synth(720, "http://host/new.html"));
-    set resp.http.Location = resp.reason;
-    set resp.status = 302;
-    return (deliver);
-  }
-
-  return (deliver);
-}
-
-
-sub vcl_fini {
-  # Called when VCL is discarded only after all requests have exited the VCL.
-  # Typically used to clean up VMODs.
-
-  return (ok);
-}
+# Block 7: Add a header for identifying cache hits/misses.
+sub vcl_
