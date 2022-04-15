@@ -30,10 +30,9 @@ nginxSetup() {
     && mkdir /etc/install \
     && cd /etc/install \
     && apt-get -y install autoconf automake bc bison build-essential ccache cmake curl dh-systemd flex gcc geoip-bin google-perftools g++ haveged icu-devtools letsencrypt libacl1-dev libbz2-dev libcap-ng-dev libcap-ng-utils libcurl4-openssl-dev libdmalloc-dev libenchant-dev libevent-dev libexpat1-dev libfontconfig1-dev libfreetype6-dev libgd-dev libgeoip-dev libghc-iconv-dev libgmp-dev libgoogle-perftools-dev libice-dev libice6 libicu-dev libjbig-dev libjpeg-dev libjpeg-turbo8-dev libjpeg8-dev libluajit-5.1-2 libluajit-5.1-common libluajit-5.1-dev liblzma-dev libmhash-dev libmhash2 libmm-dev libncurses5-dev libnspr4-dev libpam0g-dev libpcre3 libpcre3-dev libperl-dev libpng-dev libpthread-stubs0-dev libreadline-dev libselinux1-dev libsm-dev libsm6 libssl-dev libtidy-dev libtiff5-dev libtiffxx5 libtool libunbound-dev libvpx-dev libvpx3 libwebp-dev libx11-dev libxau-dev libxcb1-dev libxdmcp-dev libxml2-dev libxpm-dev libxslt1-dev libxt-dev libxt6 make nano perl pkg-config python-dev software-properties-common systemtap-sdt-dev unzip webp wget xtrans-dev zip zlib1g-dev zlibc sysstat auditd libxml-libxml-perl libxml2-utils python-libxml2 libxslt1.1 python-libxslt1 libxml-filter-xslt-perl libxml-libxslt-perl libgd-perl libgd-text-perl python-gd libgoogle-perftools4 dos2unix
-    sudo apt install software-properties-common -y
+    sudo apt install software-properties-common htop nload dos2unix curl unzip zip -y
     sudo add-apt-repository ppa:certbot/certbot -y
     sudo apt install certbot -y
-    sudo apt install htop nload dos2unix curl unzip zip -y
     sudo rm /etc/localtime
     sudo ln -s /usr/share/zoneinfo/Asia/Jakarta /etc/localtime
     mkdir -p /var/cache/pagespeed
@@ -48,8 +47,7 @@ nginxSetup() {
     useradd -d /etc/nginx -s /bin/false nginx
     fi
 
-    mkdir -p /home/nginx/htdocs/public \
-    && mkdir -p /usr/local/src/{github,packages/{openssl,pcre,zlib}} \
+    mkdir -p /usr/local/src/{github,packages/{openssl,pcre,zlib}} \
     && mkdir -p /etc/nginx/cache/{client,fastcgi,proxy,uwsgi,scgi} \
     && mkdir -p /etc/nginx/config/{php,proxy,sites,ssl} \
     && mkdir -p /etc/nginx/{lock,logs/{domains,server/{access,error}}} \
