@@ -90,10 +90,9 @@ nginxSetup() {
 
     cd /usr/local/src/packages \
     && wget https://github.com/PhilipHazel/pcre2/archive/refs/tags/pcre2-10.39.tar.gz \
-    && wget https://www.zlib.net/fossils/zlib-1.2.12.tar.gz \
-    && tar -zxvf zlib-1.2.12.tar.gz \
     && tar xvf pcre2-10.39.tar.gz --strip-components=1 -C /usr/local/src/packages/pcre \
-    && tar xvf zlib-${zlibVers}.tar.gz --strip-components=1 -C /usr/local/src/packages/zlib \
+    && wget https://www.zlib.net/fossils/zlib-1.2.12.tar.gz \
+    && tar xvf zlib-1.2.12.tar.gz --strip-components=1 -C /usr/local/src/packages/zlib \
     && cd /usr/share \
     && git clone https://github.com/openssl/openssl.git \
     && cd openssl \
@@ -183,7 +182,7 @@ nginxConfigure() {
     && wget https://raw.githubusercontent.com/viva9grup/config/main/config/fastcgi_params \
     && wget https://raw.githubusercontent.com/viva9grup/config/main/nginx.conf -O /etc/nginx/nginx.conf \
     && wget https://raw.githubusercontent.com/viva9grup/config/main/sites/_.conf -O /etc/nginx/config/ \
-    && cp -R ${currentPath}/systemd/nginx.service /lib/systemd/system/nginx.service \
+    && cp -R ${currentPath}/systemd/nginx.service /lib/systemd/system/nginx.service \\
     && wget https://raw.githubusercontent.com/viva9grup/config/main/default.vcl -O /etc/varnish/ \
     && wget https://raw.githubusercontent.com/viva9grup/config/main/varnish.params -O /etc/varnish/ \
     && wget https://raw.githubusercontent.com/viva9grup/config/main/varnish.service -O /usr/lib/systemd/system/varnish.service
