@@ -180,7 +180,7 @@ nginxConfigure() {
     && wget https://raw.githubusercontent.com/viva9grup/config/main/config/fastcgi_params \
     && wget https://raw.githubusercontent.com/viva9grup/config/main/nginx.conf -O /etc/nginx/nginx.conf \
     && wget https://raw.githubusercontent.com/viva9grup/config/main/sites/_.conf -O /etc/nginx/config/ \
-    && cp -R ${currentPath}/systemd/nginx.service /lib/systemd/system/nginx.service \\
+    && cp -R ${currentPath}/systemd/nginx.service /lib/systemd/system/nginx.service \
     && wget https://raw.githubusercontent.com/viva9grup/config/main/default.vcl -O /etc/varnish/ \
     && wget https://raw.githubusercontent.com/viva9grup/config/main/varnish.params -O /etc/varnish/ \
     && wget https://raw.githubusercontent.com/viva9grup/config/main/varnish.service -O /usr/lib/systemd/system/varnish.service
