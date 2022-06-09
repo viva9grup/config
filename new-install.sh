@@ -80,7 +80,7 @@ nginxSetup() {
     && wget https://github.com/PhilipHazel/pcre2/archive/refs/tags/pcre2-10.39.tar.gz \
     && tar xvf pcre2-10.39.tar.gz --strip-components=1 -C /usr/local/src/packages/pcre \
     && cd /usr/local/src/packages/pcre \
-    && ./autogen.sh
+    && ./autogen.sh \
     && wget https://www.zlib.net/fossils/zlib-1.2.12.tar.gz \
     && tar xvf zlib-1.2.12.tar.gz --strip-components=1 -C /usr/local/src/packages/zlib \
     && cd /usr/share \
