@@ -73,7 +73,7 @@ nginxSetup() {
     && ./autogen.sh \
     && ./configure \
     && make -j ${cpuCount} \
-    && make install
+    && make install \
     && cd /usr/local/src/github/ngx_brotli \
     && git submodule update --init \
     && cd /usr/local/src/packages \
